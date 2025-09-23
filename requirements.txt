@@ -20,3 +20,6 @@ uvicorn==0.35.0
 # Development tools
 pytest==8.2.0
 pytest-django==4.8.0
+
+# CORS support
+django-cors-headers==4.3.1

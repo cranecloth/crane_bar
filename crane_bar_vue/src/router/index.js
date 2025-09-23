@@ -1,8 +1,10 @@
 import { createRouter, createWebHistory } from "vue-router";
-import Chat from "../views/chat.vue";
+import ChatView from "../views/ChatView.vue";
+import CharacterManager from "../views/CharacterManager.vue";
 
 const routes = [
-  { path: "/", component: Chat }
+  { path: "/", component: ChatView },
+  { path: "/characters", component: CharacterManager }
 ];
 
 export default createRouter({

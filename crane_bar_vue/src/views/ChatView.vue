@@ -112,7 +112,7 @@
               :key="char.id"
               :value="char.id"
             >
-              {{ char.name }}
+              {{ char.character_name }}
             </option>
             <option value="custom">自定义角色</option>
           </select>
@@ -126,11 +126,18 @@
           <textarea
             v-model="customCharacter.description"
             placeholder="角色背景描述"
+          /><br />
+          <label>角色开场白</label>
+          <textarea
+            v-model="customCharacter.greeting"
+            placeholder="角色开场白"
           />
 
           <div class="param-grid">
             <div>
               <label>Temperature</label>
+              <span>{{ customCharacter.temperature }}</span>
+
               <input
                 type="range"
                 v-model="customCharacter.temperature"
@@ -138,10 +145,11 @@
                 max="2"
                 step="0.1"
               />
-              <span>{{ customCharacter.temperature }}</span>
             </div>
             <div>
               <label>Top P</label>
+              <span>{{ customCharacter.top_p }}</span>
+
               <input
                 type="range"
                 v-model="customCharacter.top_p"
@@ -149,10 +157,9 @@
                 max="1"
                 step="0.05"
               />
-              <span>{{ customCharacter.top_p }}</span>
             </div>
             <div>
-              <label>Top K</label>
+              <label>Top K</label><span>{{ customCharacter.top_k }}</span>
               <input
                 type="range"
                 v-model="customCharacter.top_k"
@@ -160,7 +167,6 @@
                 max="100"
                 step="1"
               />
-              <span>{{ customCharacter.top_k }}</span>
             </div>
           </div>
         </div>
@@ -193,16 +199,18 @@ const showCharacterManager = ref(false);
 const presetCharacters = ref([
   {
     id: "harry",
-    name: "哈利波特",
+    character_name: "哈利波特",
     description: "霍格沃茨的学生，擅长魔法和魁地奇",
+    greeting: "",
     temperature: 0.7,
     top_p: 0.9,
     top_k: 40,
   },
   {
     id: "socrates",
-    name: "苏格拉底",
+    character_name: "苏格拉底",
     description: "古希腊哲学家，以提问和对话著称",
+    greeting: "",
     temperature: 0.5,
     top_p: 0.8,
     top_k: 50,
@@ -212,8 +220,9 @@ const presetCharacters = ref([
 // 自定义角色
 const customCharacter = ref({
   id: "custom",
-  name: "",
+  character_name: "",
   description: "",
+  greeting: "",
   temperature: 0.7,
   top_p: 0.9,
   top_k: 40,
@@ -281,9 +290,10 @@ async function createNewChat() {
   if (selectedCharacterId.value === "custom") {
     characterConfig = {
       id: "custom",
-      name: customCharacter.value.name,
+      character_name: customCharacter.value.name,
       description: customCharacter.value.description,
       temperature: customCharacter.value.temperature,
+      greeting: customCharacter.value.greeting,
       top_p: customCharacter.value.top_p,
       top_k: customCharacter.value.top_k,
     };
@@ -293,35 +303,46 @@ async function createNewChat() {
     );
   }
 
+  const plainCharacter = JSON.parse(JSON.stringify(characterConfig));
   const chatData = {
     user_id: 1,
     title: newChatTitle.value,
     content: JSON.stringify([]),
-    character: characterConfig,
+    character: plainCharacter,
   };
+  try {
+    const newChat = await chatStore.saveChat(chatData);
 
-  const newChat = await chatStore.saveChat(chatData);
-  chatStore.currentChatId = newChat.id;
-  chatStore.messages = [];
-  showNewChatDialog.value = false;
-  newChatTitle.value = "";
+    if (!newChat || !newChat.id) {
+      console.error("创建聊天失败，返回数据：", newChat);
+      return;
+    }
 
-  // 设置WebSocket连接
-  setupWebSocket(newChat.id);
+    chatStore.currentChatId = newChat.id;
+    chatStore.messages = [];
+    showNewChatDialog.value = false;
+    newChatTitle.value = "";
 
-  await chatStore.loadChats(1);
+    // 设置 WebSocket 连接
+    setupWebSocket(newChat.id, characterConfig);
+
+    // 重新加载聊天列表
+    await chatStore.loadChats(1);
+  } catch (err) {
+    console.error("创建新聊天失败:", err);
+  }
 }
 
 function setupWebSocket(chatId) {
   if (socket) socket.close();
 
   const character = selectedCharacterId.value;
-  const url = chatId 
-    ? `ws://localhost:8000/ws/chat/${chatId}/?character=${encodeURIComponent(character)}`
+  const url = chatId
+    ? `ws://localhost:8000/ws/chat/${chatId}/?character=${encodeURIComponent(
+        character
+      )}`
     : `ws://localhost:8000/ws/chat/?character=${encodeURIComponent(character)}`;
-  
   socket = new WebSocket(url);
-
   socket.onmessage = async (event) => {
     isTyping.value = true;
     setTimeout(async () => {
@@ -330,7 +351,6 @@ function setupWebSocket(chatId) {
       chatStore.messages.push(data);
       isTyping.value = false;
       scrollToBottom();
-
       // 接收消息后也自动保存聊天记录
       await saveCurrentChat();
     }, 1000);
@@ -342,10 +362,8 @@ function setupWebSocket(chatId) {
   };
 }
 
-// WebSocket相关功能
 onMounted(async () => {
   try {
-    // 仅加载聊天记录，不建立WebSocket连接
     await chatStore.loadChats(1);
   } catch (error) {
     console.error("加载聊天记录失败:", error);
@@ -362,13 +380,15 @@ async function sendMessage() {
       sender: "我",
       message: input.value,
       timestamp: new Date(),
-      character: selectedCharacterId.value
+      character: selectedCharacterId.value,
     };
     chatStore.messages.push(msg);
-    socket.send(JSON.stringify({ 
-      message: input.value,
-      character: selectedCharacterId.value
-    }));
+    socket.send(
+      JSON.stringify({
+        message: input.value,
+        character: selectedCharacterId.value,
+      })
+    );
     input.value = "";
     scrollToBottom();
 
@@ -610,14 +630,14 @@ function formatDate(dateStr) {
   gap: 0.5rem;
 }
 
-/* 新建聊天对话框样式 */
+/* 新建聊天对话框 */
 .dialog-overlay {
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(0, 0, 0, 0.6);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -625,64 +645,172 @@ function formatDate(dateStr) {
 }
 
 .new-chat-dialog {
-  background-color: var(--bg-color);
-  padding: 1.5rem;
-  border-radius: 8px;
-  width: 400px;
-  max-width: 90%;
+  background: rgba(20, 20, 40, 0.95);
+  backdrop-filter: blur(14px);
+  padding: 2rem;
+  border-radius: 16px;
+  width: 600px;
+  max-width: 95%;
+  max-height: 90vh;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  transition: all 0.3s ease;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .new-chat-dialog h3 {
-  margin-top: 0;
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  text-align: center;
+  color: #00b4db;
 }
 
-.new-chat-dialog input {
-  width: 100%;
-  padding: 0.75rem;
-  margin: 1rem 0;
+/* 标签统一风格 */
+.new-chat-dialog label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #ccc;
+  margin-top: 0.5rem;
+  display: block;
+}
+
+/* 输入框、文本框、选择框 */
+.new-chat-dialog input,
+.new-chat-dialog textarea {
+  width: calc(100% - 4rem);
+  padding: 0.75rem 1rem;
+  margin: 0.25rem 1rem 0 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+}
+
+.new-chat-dialog select {
+  width: calc(100% - 4rem);
+  padding: 0.75rem 1rem;
+  margin: 0.25rem 1rem 0 1rem;
+  background: rgba(30, 30, 50, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  appearance: none;
+  -webkit-appearance: none;
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
+  background-size: 1rem;
+}
+
+.new-chat-dialog select option {
+  background: rgba(30, 30, 50, 0.9);
+  color: #fff;
+}
+
+.new-chat-dialog select:focus {
+  outline: none;
+  border-color: #00b4db;
+  box-shadow: 0 0 0 2px rgba(0, 180, 219, 0.3);
+  background: rgba(30, 30, 50, 0.9);
+}
+
+.new-chat-dialog input:focus,
+.new-chat-dialog textarea:focus,
+.new-chat-dialog select:focus {
+  outline: none;
+  border-color: #00b4db;
+  box-shadow: 0 0 0 2px rgba(0, 180, 219, 0.3);
   background: rgba(255, 255, 255, 0.1);
-  border: 1px solid var(--secondary-color);
-  border-radius: 4px;
-  color: var(--text-color);
 }
 
+/* 自定义角色参数网格 */
+.param-grid {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.param-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.param-grid label {
+  font-size: 0.8rem;
+  color: #aaa;
+}
+
+.param-grid input[type="range"] {
+  width: 80%;
+}
+
+/* 文本区统一高度 */
+.new-chat-dialog textarea {
+  resize: vertical;
+  min-height: 100px;
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  width: calc(100% - 4rem);
+}
+
+/* 按钮组 */
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+  margin-top: 1rem;
 }
 
 .dialog-actions button {
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
+  padding: 0.6rem 1.5rem;
+  border-radius: 12px;
   cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  font-size: 0.95rem;
 }
 
 .dialog-actions button:first-child {
-  background: transparent;
-  border: 1px solid var(--secondary-color);
-  color: #ffffff;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+}
+
+.dialog-actions button:first-child:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .dialog-actions button:last-child {
-  background: var(--primary-color);
-  color: #111;
+  background: linear-gradient(135deg, #00b4db 0%, #0083b0 100%);
   border: none;
+  color: #fff;
 }
 
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .chat-view {
-    flex-direction: column;
+.dialog-actions button:last-child:hover {
+  filter: brightness(1.1);
+}
+
+/* 响应式优化 */
+@media (max-width: 500px) {
+  .new-chat-dialog {
+    width: 90%;
+    padding: 1.5rem;
   }
 
-  .chat-sidebar {
-    width: 100%;
-    height: 200px;
-  }
-
-  .chat-main {
-    height: calc(100vh - 200px);
+  .param-grid {
+    grid-template-columns: 1fr;
   }
 }
 

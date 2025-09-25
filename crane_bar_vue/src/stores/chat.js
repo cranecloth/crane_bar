@@ -6,6 +6,7 @@ export const useChatStore = defineStore("chat", () => {
   const chats = ref([]);
   const messages = ref([]);
   const isLoading = ref(false);
+  const character_name = ref("");
 
   async function loadChats(userId) {
     try {
@@ -57,11 +58,11 @@ export const useChatStore = defineStore("chat", () => {
       const response = await fetch(
         `http://localhost:8000/api/chat/${userId}/${chatId}/`
       );
-      console.log(response);
       if (!response.ok) {
         throw new Error("Failed to load messages");
       }
       const data = await response.json();
+      character_name.value = data.character_name;
       messages.value = JSON.parse(data.content);
     } catch (error) {
       console.error("Error loading messages:", error);
@@ -76,6 +77,7 @@ export const useChatStore = defineStore("chat", () => {
     chats,
     messages,
     isLoading,
+    character_name,
     loadChats,
     saveChat,
     deleteChat,

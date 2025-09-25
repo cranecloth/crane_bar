@@ -43,11 +43,21 @@
     <div class="chat-main">
       <div v-if="chatStore.currentChatId" class="chat-container">
         <div class="chat-header">
-          <h2>{{ currentChatTitle }}</h2>
-          <div class="typing-indicator" v-if="isTyping">
-            <span></span>
-            <span></span>
-            <span></span>
+          <div class="chat-title-wrapper">
+            <h2>{{ currentChatTitle }}</h2>
+            <span class="character-name">{{ character_name }}</span>
+          </div>
+          <div class="voice-wrapper">
+            <span class="voice-label">音色选择</span>
+            <select id="voiceSelect" v-model="selectedVoice">
+              <option
+                v-for="voice in voices"
+                :key="voice.voice_type"
+                :value="voice.voice_type"
+              >
+                {{ voice.voice_name }}
+              </option>
+            </select>
           </div>
         </div>
 
@@ -62,6 +72,13 @@
               ]"
             >
               <div class="message-content">{{ msg.message }}</div>
+              <button
+                v-if="msg.sender !== '我'"
+                class="tts-btn"
+                @click="playTTS(msg.message)"
+              >
+                🔊
+              </button>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
           </transition-group>
@@ -75,6 +92,9 @@
               placeholder="输入消息..."
               @focus="scrollToBottom"
             />
+            <button @click="toggleRecording">
+              {{ isRecording ? "🛑" : "▶" }}
+            </button>
             <button @click="sendMessage" :disabled="!input.trim()">
               <svg viewBox="0 0 24 24" width="24" height="24">
                 <path
@@ -193,15 +213,19 @@ const messagesContainer = ref(null);
 const showNewChatDialog = ref(false);
 const newChatTitle = ref("");
 const selectedCharacterId = ref("harry");
-const showCharacterManager = ref(false);
-
+const voices = ref([]);
+const selectedVoice = ref(null);
+let character_name = "";
+const isRecording = ref(false);
+let recognition = null;
 // 预定义角色
 const presetCharacters = ref([
   {
     id: "harry",
     character_name: "哈利波特",
     description: "霍格沃茨的学生，擅长魔法和魁地奇",
-    greeting: "",
+    greeting:
+      "嗨，我是哈利·波特。嗯……是的，就是那个额头上有闪电疤痕的家伙。最近霍格沃茨可不太平，总觉得有什么黑暗的气息在靠近。你愿意和我一起去禁林探险，或者偷偷去找一找那本神秘的魔法书吗？",
     temperature: 0.7,
     top_p: 0.9,
     top_k: 40,
@@ -210,7 +234,8 @@ const presetCharacters = ref([
     id: "socrates",
     character_name: "苏格拉底",
     description: "古希腊哲学家，以提问和对话著称",
-    greeting: "",
+    greeting:
+      "你好，我是苏格拉底。或许我并没有答案，但我会以提问来与你一同寻找真理。告诉我，朋友，你认为“幸福”的本质是什么呢？是财富、荣誉，还是灵魂的安宁？我很期待与你展开一场思想的对话。",
     temperature: 0.5,
     top_p: 0.8,
     top_k: 50,
@@ -236,8 +261,15 @@ const currentChatTitle = computed(() => {
 });
 
 // 选择聊天
-async function selectChat(chatId) {
-  // 关闭现有连接
+function debounce(fn, delay = 300) {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
+async function _selectChat(chatId) {
   if (socket) {
     socket.close();
     socket = null;
@@ -245,10 +277,12 @@ async function selectChat(chatId) {
 
   chatStore.currentChatId = chatId;
   await chatStore.loadMessages(1, chatId);
-
-  // 使用chat_id建立新的WebSocket连接
+  character_name = chatStore.character_name;
+  getVoices();
   setupWebSocket(chatId);
 }
+
+const selectChat = debounce(_selectChat, 250);
 
 // 保存当前聊天
 async function saveCurrentChat() {
@@ -333,15 +367,122 @@ async function createNewChat() {
   }
 }
 
+async function playTTS(text) {
+  try {
+    const selectedVoice = document.getElementById("voiceSelect").value;
+    const response = await fetch("https://openai.qiniu.com/v1/voice/tts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization:
+          "Bearer sk-4ad6e020dfcb77fb3cf4e0a209816b67373578b43d30e09d411ba59e57554bd5",
+      },
+      body: JSON.stringify({
+        audio: {
+          voice_type: selectedVoice,
+          encoding: "mp3",
+          speed_ratio: 1.0,
+        },
+        request: {
+          text: text,
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (
+      data &&
+      data.data &&
+      typeof data.data === "string" &&
+      data.data !== "data"
+    ) {
+      const audio = new Audio("data:audio/mp3;base64," + data.data);
+      audio.play();
+    } else if (data && data.addition && data.addition.url) {
+      const audio = new Audio(data.addition.url);
+      audio.play();
+    } else {
+      console.warn("TTS API 返回占位数据或格式异常:", data);
+      alert("语音合成尚未完成或接口格式已更新，请使用音频 URL 播放");
+    }
+  } catch (error) {
+    console.error("TTS 错误:", error);
+    alert("语音合成失败，请检查控制台");
+  }
+}
+
+async function getVoices() {
+  try {
+    const response = await fetch("https://openai.qiniu.com/v1/voice/list", {
+      method: "GET",
+      headers: {
+        Authorization:
+          "Bearer sk-4ad6e020dfcb77fb3cf4e0a209816b67373578b43d30e09d411ba59e57554bd5",
+      },
+    });
+    const data = await response.json();
+    voices.value = data;
+    if (data.length > 0) selectedVoice.value = data[0].voice_type;
+  } catch (err) {
+    console.error("获取音色失败:", err);
+  }
+}
+
+async function toggleRecording() {
+  if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) {
+    alert("浏览器不支持语音识别，请使用 Chrome 或 Edge");
+    return;
+  }
+
+  if (isRecording.value) {
+    // 停止识别
+    recognition.stop();
+    isRecording.value = false;
+  } else {
+    try {
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.lang = "zh-CN"; // 中文识别
+      recognition.interimResults = false; // 是否返回中间结果
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        isRecording.value = true;
+        console.log("语音识别开始...");
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        console.log("识别结果:", transcript);
+        input.value = transcript; // 填入输入框
+      };
+
+      recognition.onerror = (event) => {
+        console.error("识别错误:", event.error);
+        alert("语音识别出错: " + event.error);
+      };
+
+      recognition.onend = () => {
+        isRecording.value = false;
+        console.log("语音识别结束");
+      };
+
+      recognition.start();
+    } catch (err) {
+      console.error("语音识别失败:", err);
+      alert("语音识别失败");
+    }
+  }
+}
+
 function setupWebSocket(chatId) {
   if (socket) socket.close();
 
   const character = selectedCharacterId.value;
-  const url = chatId
-    ? `ws://localhost:8000/ws/chat/${chatId}/?character=${encodeURIComponent(
-        character
-      )}`
-    : `ws://localhost:8000/ws/chat/?character=${encodeURIComponent(character)}`;
+  const url = `ws://localhost:8000/ws/chat/${chatId}/?character=${encodeURIComponent(
+    character
+  )}`;
   socket = new WebSocket(url);
   socket.onmessage = async (event) => {
     isTyping.value = true;
@@ -355,7 +496,6 @@ function setupWebSocket(chatId) {
       await saveCurrentChat();
     }, 1000);
   };
-
   socket.onerror = (error) => {
     console.error("WebSocket error:", error);
     alert("连接聊天服务器失败，请稍后重试");
@@ -430,15 +570,58 @@ function formatDate(dateStr) {
 </script>
 
 <style scoped>
-/* 粒子背景容器 */
-.particles-container {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: -1;
-  opacity: 0.2;
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.chat-title-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.character-name {
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.voice-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.voice-label {
+  font-size: 0.9rem;
+  color: #ccc;
+  font-weight: 500;
+}
+
+#voiceSelect {
+  padding: 0.5rem 1rem;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.1); /* 半透明背景 */
+  color: #fff; /* 字体颜色 */
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+#voiceSelect option {
+  background: rgba(30, 30, 50, 0.9);
+}
+
+#voiceSelect:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 2px rgba(0, 180, 219, 0.3);
 }
 
 .chat-view {
@@ -651,7 +834,7 @@ function formatDate(dateStr) {
   border-radius: 16px;
   width: 600px;
   max-width: 95%;
-  max-height: 90vh;
+  max-height: 80vh;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
   color: #ffffff;
   display: flex;
@@ -864,5 +1047,12 @@ function formatDate(dateStr) {
 .input-wrapper button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.tts-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #00b4db;
+  font-size: 1rem;
 }
 </style>

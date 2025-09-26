@@ -7,6 +7,7 @@ export const useChatStore = defineStore("chat", () => {
   const messages = ref([]);
   const isLoading = ref(false);
   const character_name = ref("");
+  const character_data = ref([]);
 
   async function loadChats(userId) {
     try {
@@ -63,6 +64,14 @@ export const useChatStore = defineStore("chat", () => {
       }
       const data = await response.json();
       character_name.value = data.character_name;
+      character_data.value.character_name = data.character_name;
+      character_data.value.character_description = data.character_description;
+      character_data.value.temperature = data.temperature;
+      character_data.value.top_p = data.top_p;
+      character_data.value.top_k = data.top_k;
+      character_data.value.greeting = data.greeting;
+      character_data.value.chat_id = data.id;
+      character_data.value.user_id = data.user_id;
       messages.value = JSON.parse(data.content);
     } catch (error) {
       console.error("Error loading messages:", error);
@@ -78,6 +87,7 @@ export const useChatStore = defineStore("chat", () => {
     messages,
     isLoading,
     character_name,
+    character_data,
     loadChats,
     saveChat,
     deleteChat,

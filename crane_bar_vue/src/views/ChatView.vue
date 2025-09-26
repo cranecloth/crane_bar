@@ -23,6 +23,7 @@
         >
           <div class="chat-title">{{ chat.title }}</div>
           <div class="chat-time">{{ formatDate(chat.updated_at) }}</div>
+
           <button
             @click.stop="deleteChat(1, chat.id)"
             class="delete-chat-btn"
@@ -32,6 +33,18 @@
               <path
                 fill="currentColor"
                 d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
+              />
+            </svg>
+          </button>
+          <button
+            @click.stop="openEditCharacterDialog(1, chat.id)"
+            class="edit-character-btn"
+            title="修改角色"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path
+                fill="currentColor"
+                d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"
               />
             </svg>
           </button>
@@ -81,6 +94,7 @@
               </button>
               <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
             </div>
+            <div v-if="isTyping" class="typing-indicator">AI 正在输入中...</div>
           </transition-group>
         </div>
 
@@ -140,7 +154,10 @@
 
         <div v-if="selectedCharacterId === 'custom'" class="dialog-section">
           <label>角色名称</label>
-          <input v-model="customCharacter.name" placeholder="角色名称" />
+          <input
+            v-model="customCharacter.character_name"
+            placeholder="角色名称"
+          />
 
           <label>角色描述</label>
           <textarea
@@ -190,13 +207,87 @@
             </div>
           </div>
         </div>
-
+        <div v-if="selectedCharacterId === 'custom'" class="import-wrapper">
+          <label>导入角色</label>
+          <div class="import-box">
+            <input
+              type="file"
+              accept="application/json"
+              @change="importCharacterJson"
+              class="import-section"
+            />
+          </div>
+        </div>
         <div class="dialog-actions">
           <button @click="showNewChatDialog = false">取消</button>
           <button @click="createNewChat" :disabled="!newChatTitle.trim()">
             创建
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 修改角色对话框 -->
+  <div v-if="showEditCharacterDialog" class="dialog-overlay">
+    <div class="new-chat-dialog">
+      <h3>修改角色设定</h3>
+      <div class="dialog-section">
+        <label>角色名称</label>
+        <input
+          v-model="editingCharacter.character_name"
+          placeholder="角色名称"
+        />
+      </div>
+
+      <div class="dialog-section">
+        <label>角色描述</label>
+        <textarea
+          v-model="editingCharacter.character_description"
+          placeholder="角色背景描述"
+        />
+      </div>
+
+      <div class="param-grid">
+        <div>
+          <label>Temperature</label>
+          <span>{{ editingCharacter.temperature }}</span>
+          <input
+            type="range"
+            v-model="editingCharacter.temperature"
+            min="0"
+            max="2"
+            step="0.1"
+          />
+        </div>
+        <div>
+          <label>Top P</label>
+          <span>{{ editingCharacter.top_p }}</span>
+          <input
+            type="range"
+            v-model="editingCharacter.top_p"
+            min="0"
+            max="1"
+            step="0.05"
+          />
+        </div>
+        <div>
+          <label>Top K</label>
+          <span>{{ editingCharacter.top_k }}</span>
+          <input
+            type="range"
+            v-model="editingCharacter.top_k"
+            min="1"
+            max="100"
+            step="1"
+          />
+        </div>
+      </div>
+
+      <div class="dialog-actions">
+        <button @click="downloadCharacter">导出角色</button>
+        <button @click="showEditCharacterDialog = false">取消</button>
+        <button @click="updateCharacter">保存</button>
       </div>
     </div>
   </div>
@@ -208,7 +299,6 @@ import { useChatStore } from "@/stores/chat";
 
 const chatStore = useChatStore();
 const input = ref("");
-const isTyping = ref(false);
 const messagesContainer = ref(null);
 const showNewChatDialog = ref(false);
 const newChatTitle = ref("");
@@ -218,6 +308,15 @@ const selectedVoice = ref(null);
 let character_name = "";
 const isRecording = ref(false);
 let recognition = null;
+
+const isTyping = computed(() => {
+  const messages = chatStore.messages;
+  if (!messages.length) return false;
+
+  const lastMsg = messages[messages.length - 1];
+  return lastMsg.sender === "我";
+});
+
 // 预定义角色
 const presetCharacters = ref([
   {
@@ -251,6 +350,18 @@ const customCharacter = ref({
   temperature: 0.7,
   top_p: 0.9,
   top_k: 40,
+});
+
+const showEditCharacterDialog = ref(false);
+const editingCharacter = ref({
+  id: "",
+  character_name: "",
+  character_description: "",
+  greeting: "",
+  temperature: 0.7,
+  top_p: 0.9,
+  top_k: 40,
+  user_id: 0,
 });
 let socket = null;
 
@@ -314,6 +425,95 @@ async function deleteChat(userId, chatId) {
     alert(`删除聊天记录失败: ${error.message || "未知错误"}`);
   }
 }
+// 修改角色设定
+async function openEditCharacterDialog(userid, chatid) {
+  await chatStore.loadMessages(userid, chatid);
+  editingCharacter.value.character_name =
+    chatStore.character_data.character_name;
+  editingCharacter.value.character_description =
+    chatStore.character_data.character_description;
+  editingCharacter.value.temperature = chatStore.character_data.temperature;
+  editingCharacter.value.top_p = chatStore.character_data.top_p;
+  editingCharacter.value.top_k = chatStore.character_data.top_k;
+  editingCharacter.value.greeting = chatStore.character_data.greeting;
+  editingCharacter.value.id = chatStore.character_data.chat_id;
+  editingCharacter.value.user_id = chatStore.character_data.user_id;
+  console.log(editingCharacter.value);
+  showEditCharacterDialog.value = true;
+}
+
+async function updateCharacter() {
+  try {
+    const response = await fetch(
+      `http://localhost:8000/api/chat/${editingCharacter.value.user_id}/${editingCharacter.value.id}/`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(editingCharacter.value),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("更新角色失败");
+    }
+
+    showEditCharacterDialog.value = false;
+    await chatStore.loadChats(1);
+  } catch (error) {
+    console.error("更新角色失败:", error);
+    alert(`更新角色失败: ${error.message || "未知错误"}`);
+  }
+}
+
+// 导出角色
+function exportJSON(editingCharacter, filename = "data.json") {
+  const jsonStr = JSON.stringify(editingCharacter, null, 2);
+  const blob = new Blob([jsonStr], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function downloadCharacter() {
+  exportJSON(
+    editingCharacter.value,
+    `${editingCharacter.value.character_name || "角色"}.json`
+  );
+}
+
+// 导入角色
+function importCharacterJson(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const json = JSON.parse(e.target.result);
+      customCharacter.value = {
+        id: "custom",
+        character_name: json.character_name || "",
+        description: json.character_description || "",
+        greeting: json.greeting || "",
+        temperature: json.temperature ?? 0.7,
+        top_p: json.top_p ?? 0.9,
+        top_k: json.top_k ?? 40,
+      };
+
+      console.log("更新后的 customCharacter:", customCharacter.value);
+    } catch (err) {
+      console.error("导入失败:", err);
+    }
+  };
+  reader.readAsText(file);
+}
 
 // 创建新聊天
 async function createNewChat() {
@@ -324,7 +524,7 @@ async function createNewChat() {
   if (selectedCharacterId.value === "custom") {
     characterConfig = {
       id: "custom",
-      character_name: customCharacter.value.name,
+      character_name: customCharacter.value.character_name,
       description: customCharacter.value.description,
       temperature: customCharacter.value.temperature,
       greeting: customCharacter.value.greeting,
@@ -362,6 +562,7 @@ async function createNewChat() {
 
     // 重新加载聊天列表
     await chatStore.loadChats(1);
+    await getVoices();
   } catch (err) {
     console.error("创建新聊天失败:", err);
   }
@@ -375,7 +576,7 @@ async function playTTS(text) {
       headers: {
         "Content-Type": "application/json",
         Authorization:
-          "Bearer sk-4ad6e020dfcb77fb3cf4e0a209816b67373578b43d30e09d411ba59e57554bd5",
+          "Bearer sk-e38a1abe42b2acffa190cd2469e5d6cf000b7dc5c197eaadf3ea5a53f8275a49",
       },
       body: JSON.stringify({
         audio: {
@@ -417,7 +618,7 @@ async function getVoices() {
       method: "GET",
       headers: {
         Authorization:
-          "Bearer sk-4ad6e020dfcb77fb3cf4e0a209816b67373578b43d30e09d411ba59e57554bd5",
+          "Bearer sk-e38a1abe42b2acffa190cd2469e5d6cf000b7dc5c197eaadf3ea5a53f8275a49",
       },
     });
     const data = await response.json();
@@ -444,7 +645,7 @@ async function toggleRecording() {
         window.SpeechRecognition || window.webkitSpeechRecognition;
       recognition = new SpeechRecognition();
       recognition.lang = "zh-CN"; // 中文识别
-      recognition.interimResults = false; // 是否返回中间结果
+      recognition.interimResults = false;
       recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
@@ -455,7 +656,7 @@ async function toggleRecording() {
       recognition.onresult = (event) => {
         const transcript = event.results[0][0].transcript;
         console.log("识别结果:", transcript);
-        input.value = transcript; // 填入输入框
+        input.value = transcript;
       };
 
       recognition.onerror = (event) => {
@@ -484,17 +685,15 @@ function setupWebSocket(chatId) {
     character
   )}`;
   socket = new WebSocket(url);
+
   socket.onmessage = async (event) => {
-    isTyping.value = true;
     setTimeout(async () => {
       const data = JSON.parse(event.data);
       data.timestamp = new Date();
       chatStore.messages.push(data);
-      isTyping.value = false;
       scrollToBottom();
-      // 接收消息后也自动保存聊天记录
       await saveCurrentChat();
-    }, 1000);
+    }, 500);
   };
   socket.onerror = (error) => {
     console.error("WebSocket error:", error);
@@ -708,6 +907,21 @@ function formatDate(dateStr) {
   color: #ff6b6b;
 }
 
+.edit-character-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 1.75rem;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.edit-character-btn:hover {
+  color: #4dabf7;
+}
+
 .chat-main {
   flex: 1;
   display: flex;
@@ -851,6 +1065,10 @@ function formatDate(dateStr) {
   font-weight: 600;
   text-align: center;
   color: #00b4db;
+}
+
+.import-box {
+  width: 50%;
 }
 
 /* 标签统一风格 */

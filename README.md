@@ -12,11 +12,11 @@ LLM 模型：Grok Fast 4
 1.安装后端依赖文件：
 在crane_bar目录下执行 pip install -r requirements.txt 命令
 2.进行后端数据库迁移：
-在crane_bar目录下执行 python manage.py migrate
+在crane_bar_django目录下执行 python manage.py migrate
 3.安装前端依赖：
 在crane_bar_vue目录下执行 npm install 命令
 4.启动项目
-分别打开start前端.bat和start后端.bat，然后通过浏览器访问：http://localhost:5173/ 即可使用
+分别打开startDjango.bat和startVue.bat，然后通过浏览器访问：http://localhost:5173/ 即可使用
 ```
 # 测试环境
 ```
